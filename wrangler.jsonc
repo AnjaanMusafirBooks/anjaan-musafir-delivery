@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "anjaan-musafir-delivery",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-04",
+
+  "vars": {
+    "CASHFREE_ENV": "sandbox",
+    "FRONTEND_URL": "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO",
+    "WORKER_PUBLIC_URL": "https://YOUR-WORKER.workers.dev",
+    "MAX_DOWNLOADS": "3"
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "anjaan-musafir-db",
+      "database_id": "PASTE_D1_DATABASE_ID_HERE"
+    }
+  ],
+
+  "r2_buckets": [
+    {
+      "binding": "BOOKS",
+      "bucket_name": "anjaan-musafir-books"
+    }
+  ]
+}
