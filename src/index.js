@@ -305,6 +305,7 @@ async function handleWebhook(request, env) {
 async function handleDownload(request, env) {
   const url = new URL(request.url);
   const token = url.searchParams.get("token");
+
   if (!token) return text("Missing download token.", 400);
 
   const row = await env.DB.prepare(
@@ -317,52 +318,59 @@ async function handleDownload(request, env) {
   ).bind(token).first();
 
   if (!row) return text("Invalid download link.", 404);
-  if (row.payment_status !== "PAID") return text("Payment not verified.", 403);
-  if (new Date(row.expires_at).getTime() < Date.now()) return text("Download link expired.", 410);
+  if (row.payment_status !== "PAID") {
+    return text("Payment not verified.", 403);
+  }
+
+  if (new Date(row.expires_at).getTime() < Date.now()) {
+    return text("Download link expired.", 410);
+  }
 
   const maxDownloads = Number(env.MAX_DOWNLOADS || 3);
+
   if (Number(row.download_count) >= maxDownloads) {
     return text("Download limit reached.", 429);
   }
 
-  const object = await env.BOOKS.get(row.file_key);
-  if (!object) return text("File not found.", 404);
+  const assetPath = `/books/${String(row.file_key).replace(/^\/?books\//, "")}`;
+
+  const assetUrl = new URL(assetPath, request.url);
+
+  const assetResponse = await env.ASSETS.fetch(
+    new Request(assetUrl.toString(), {
+      method: "GET",
+      headers: {
+        "Accept": "application/pdf"
+      }
+    })
+  );
+
+  if (!assetResponse.ok) {
+    return text("File not found.", 404);
+  }
 
   await env.DB.prepare(
     "UPDATE downloads SET download_count = download_count + 1, last_download_at = CURRENT_TIMESTAMP WHERE id = ?1"
   ).bind(row.id).run();
 
-  const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  headers.set("Content-Type", object.httpMetadata?.contentType || "application/pdf");
+  const headers = new Headers(assetResponse.headers);
+
   headers.set(
     "Content-Disposition",
-    `attachment; filename="${String(row.file_name || "ebook.pdf").replace(/["\r\n]/g, "")}"`
+    `attachment; filename="${String(
+      row.file_name || "ebook.pdf"
+    ).replace(/["\r\n]/g, "")}"`
   );
+
   headers.set("Cache-Control", "private, no-store");
   headers.set("X-Content-Type-Options", "nosniff");
+  headers.set("Content-Type", "application/pdf");
 
-  return new Response(object.body, { headers });
+  return new Response(assetResponse.body, {
+    status: 200,
+    headers
+  });
 }
-
-async function handleProduct(request, env) {
-  const url = new URL(request.url);
-  const productId = url.searchParams.get("product_id");
-  if (!productId) return json({ error: "product_id is required." }, 400);
-
-  const product = await env.DB.prepare(
-    "SELECT product_id, name, price, currency FROM products WHERE product_id = ?1 AND active = 1 LIMIT 1"
-  ).bind(productId).first();
-
-  if (!product) return json({ error: "Product not found." }, 404);
-  return json(product);
-}
-
-export default {
-  async fetch(request, env) {
-    if (request.method === "OPTIONS") {
-      return new Response(null, { headers: CORS_HEADERS });
-    }
 
     const url = new URL(request.url);
 
