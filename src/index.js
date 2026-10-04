@@ -372,7 +372,7 @@ async function handleDownload(request, env) {
   });
 }
 
-    async function handleProduct(request, env) {
+  async function handleProduct(request, env) {
   const url = new URL(request.url);
   const productId = url.searchParams.get("product_id");
 
