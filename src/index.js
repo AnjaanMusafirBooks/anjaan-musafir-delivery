@@ -186,7 +186,7 @@ async function handleCreateOrder(request, env) {
 
   const cfPayload = {
     order_id: orderId,
-    order_amount: Number(product.price),
+    order_amount: product.offer_price ?? product.price,
     order_currency: "INR",
     customer_details: {
       customer_id: `cust_${crypto.randomUUID().replaceAll("-", "").slice(0, 18)}`,
