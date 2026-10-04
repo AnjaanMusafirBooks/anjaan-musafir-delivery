@@ -218,12 +218,12 @@ async function handleCreateOrder(request, env) {
     `INSERT INTO orders
       (order_id, product_id, customer_name, customer_email, customer_phone, amount, payment_status)
      VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'CREATED')`
-  ).bind(orderId, productId, name || null, email, phone, Number(product.price)).run();
+  ).bind(orderId, productId, name || null, email, phone, product.offer_price ?? product.price).run();
 
   return json({
     order_id: orderId,
     payment_session_id: data.payment_session_id,
-    amount: Number(product.price),
+    amount: product.offer_price ?? product.price,
     product_name: product.name,
   });
 }
