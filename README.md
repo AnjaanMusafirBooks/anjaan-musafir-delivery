@@ -183,3 +183,4 @@ This is the core payment + delivery system. It does NOT yet include:
 - advanced anti-sharing/DRM
 
 Those can be added after the core flow is live.
+Cloudflare deployment connected.
