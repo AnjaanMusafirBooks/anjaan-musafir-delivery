@@ -372,6 +372,31 @@ async function handleDownload(request, env) {
   });
 }
 
+    async function handleProduct(request, env) {
+  const url = new URL(request.url);
+  const productId = url.searchParams.get("product_id");
+
+  if (!productId) {
+    return json({ error: "product_id is required." }, 400);
+  }
+
+  const product = await env.DB.prepare(
+    "SELECT product_id, name, price, currency FROM products WHERE product_id = ?1 AND active = 1 LIMIT 1"
+  ).bind(productId).first();
+
+  if (!product) {
+    return json({ error: "Product not found." }, 404);
+  }
+
+  return json(product);
+}
+
+export default {
+  async fetch(request, env) {
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: CORS_HEADERS });
+    }
+
     const url = new URL(request.url);
 
     try {
@@ -391,15 +416,23 @@ async function handleDownload(request, env) {
         return await handleDownload(request, env);
       }
 
+      if (url.pathname.startsWith("/books/")) {
+        return text("Not found.", 404);
+      }
+
       if (request.method === "GET" && url.pathname === "/api/product") {
         return await handleProduct(request, env);
       }
 
       if (request.method === "GET" && url.pathname === "/health") {
-        return json({ ok: true, service: "anjaan-musafir-delivery" });
+        return json({
+          ok: true,
+          service: "anjaan-musafir-delivery"
+        });
       }
 
       return json({ error: "Not found." }, 404);
+
     } catch (err) {
       console.error(err);
       return json({ error: "Internal server error." }, 500);
