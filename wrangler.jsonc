@@ -7,7 +7,7 @@
   "vars": {
     "CASHFREE_ENV": "sandbox",
     "FRONTEND_URL": "https://anjaanmusafirbooks.github.io/official",
-    "WORKER_PUBLIC_URL": "https://YOUR-WORKER.workers.dev",
+    "WORKER_PUBLIC_URL": "https://anjaan-musafir-delivery.officialsuperswagg.workers.dev",
     "MAX_DOWNLOADS": "3"
   },
 
