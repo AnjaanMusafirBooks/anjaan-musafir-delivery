@@ -6,7 +6,7 @@
 
   "vars": {
     "CASHFREE_ENV": "sandbox",
-    "FRONTEND_URL": "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPO",
+    "FRONTEND_URL": "https://anjaanmusafirbooks.github.io/official",
     "WORKER_PUBLIC_URL": "https://YOUR-WORKER.workers.dev",
     "MAX_DOWNLOADS": "3"
   },
