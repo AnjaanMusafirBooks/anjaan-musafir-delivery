@@ -328,22 +328,38 @@ async function handleDownload(request, env) {
   }
 
   const maxDownloads = Number(env.MAX_DOWNLOADS || 3);
+const assetUrl = new URL(
+  "/books/" + encodeURIComponent(row.file_key),
+  request.url
+);
 
-  if (Number(row.download_count) >= maxDownloads) {
-    return text("Download limit reached.", 429);
-  }
+const assetResponse = await env.ASSETS.fetch(
+  new Request(assetUrl.toString())
+);
 
-  const assetPath = `/books/${String(row.file_key).replace(/^\/?books\//, "")}`;
+if (!assetResponse.ok) {
+  return text("File not found.", 404);
+}
 
-  const assetUrl = new URL(assetPath, request.url);
+await env.DB.prepare(
+  "UPDATE downloads SET download_count = download_count + 1, last_download_at = CURRENT_TIMESTAMP WHERE id = ?1"
+).bind(row.id).run();
 
-  const assetResponse = await env.ASSETS.fetch(
-    new Request(assetUrl.toString(), {
-      method: "GET",
-      headers: {
-        "Accept": "application/pdf"
-      }
-    })
+const headers = new Headers(assetResponse.headers);
+
+headers.set(
+  "Content-Disposition",
+  `attachment; filename="${String(row.file_name || "ebook.pdf").replace(/["\r\n]/g, "")}"`
+);
+
+headers.set("Cache-Control", "private, no-store");
+headers.set("X-Content-Type-Options", "nosniff");
+headers.set("Content-Type", "application/pdf");
+
+return new Response(assetResponse.body, {
+  status: 200,
+  headers
+});
   );
 
   if (!assetResponse.ok) {
