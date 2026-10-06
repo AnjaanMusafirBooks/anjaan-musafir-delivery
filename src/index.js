@@ -192,52 +192,56 @@ async function markOrderPaidAndToken(env, orderId) {
 
 
 // ---------- Email (Brevo, मुफ़्त) — BREVO_API_KEY और BREVO_SENDER न हों तो चुपचाप छोड़ देता है ----------
+// ---------- Email (Brevo Template) ----------
 async function sendOrderEmail(env, order, token) {
-  if (!env.BREVO_API_KEY || !env.BREVO_SENDER) return;
+  if (!env.BREVO_API_KEY) return;
 
   try {
     const p = await env.DB.prepare(
       "SELECT name FROM products WHERE product_id = ?1"
     ).bind(order.product_id).first();
 
-    const link =
+    const downloadUrl =
       `${env.WORKER_PUBLIC_URL.replace(/\/$/, "")}/download?token=${encodeURIComponent(token)}`;
 
-    const myOrder =
-      `${String(env.FRONTEND_URL || "").replace(/\/$/, "")}/my-order.html`;
-
-    const html = `<p>नमस्ते ${order.customer_name || ""},</p>
-      <p>आपके भुगतान के लिए धन्यवाद। आपकी eBook <b>${p ? p.name : ""}</b> तैयार है।</p>
-      <p><a href="${link}">👉 eBook Download करें</a></p>
-      <p>Order ID: <b>${order.order_id}</b><br>यह link सीमित समय और सीमित बार के लिए है। बाद में नया link चाहिए तो
-      <a href="${myOrder}">Mera Order</a> पेज पर Order ID और email डालिए।</p>
-      <p>— Anjaan Musafir Books</p>`;
-
-    await fetch("https://api.brevo.com/v3/smtp/email", {
+    const response = await fetch("https://api.brevo.com/v3/smtp/email", {
       method: "POST",
       headers: {
         "api-key": env.BREVO_API_KEY,
         "Content-Type": "application/json",
-        accept: "application/json"
+        "Accept": "application/json"
       },
       body: JSON.stringify({
         sender: {
           name: "Anjaan Musafir Books",
-          email: env.BREVO_SENDER
+          email: "officialsuperswagg@gmail.com"
         },
+
         to: [{
           email: order.customer_email,
           name: order.customer_name || undefined
         }],
-        subject: "आपकी eBook तैयार है — Anjaan Musafir Books",
-        htmlContent: html,
-      }),
+
+        templateId: 1,
+
+        params: {
+          customer_name: order.customer_name || "",
+          book_name: p ? p.name : "",
+          order_id: order.order_id,
+          amount: Number(order.amount || 0),
+          download_url: downloadUrl
+        }
+      })
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Brevo email failed:", response.status, errorText);
+    }
   } catch (e) {
-    console.error("email failed", e);
+    console.error("Brevo email error:", e);
   }
 }
-
 
 // ---------- Mera Order: Order ID + email मिलाकर नया download link ----------
 async function handleMyOrder(request, env) {
