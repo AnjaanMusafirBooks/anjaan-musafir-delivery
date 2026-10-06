@@ -1043,7 +1043,16 @@ async function handleAdmin(request, env, url) {
 
 export default {
   async fetch(request, env) {
-
+if (new URL(request.url).pathname === "/api/diagnostic") {
+  return json({
+    cashfree_env: env.CASHFREE_ENV || "MISSING",
+    client_id_present: !!env.CASHFREE_CLIENT_ID,
+    client_id_length: env.CASHFREE_CLIENT_ID?.length || 0,
+    client_secret_present: !!env.CASHFREE_CLIENT_SECRET,
+    client_secret_length: env.CASHFREE_CLIENT_SECRET?.length || 0,
+    worker_public_url: env.WORKER_PUBLIC_URL || "MISSING"
+  });
+}
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: CORS_HEADERS
