@@ -5,7 +5,7 @@
   "compatibility_date": "2026-10-04",
 
   "vars": {
-    "CASHFREE_ENV": "sandbox",
+    "CASHFREE_ENV": "production",
     "FRONTEND_URL": "https://anjaanmusafirbooks.github.io/official",
     "WORKER_PUBLIC_URL": "https://anjaan-musafir-delivery.officialsuperswagg.workers.dev",
     "MAX_DOWNLOADS": "3"
