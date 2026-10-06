@@ -524,6 +524,7 @@ async function handleCreateOrder(request, env) {
 
       customer_name: name,
       customer_email: email,
+      customer_phone: phone,
     },
 
     order_meta: {
