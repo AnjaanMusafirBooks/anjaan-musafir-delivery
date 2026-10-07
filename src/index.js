@@ -1,17 +1,44 @@
-/* =====================================================================
-   Anjaan Musafir Books — Worker (backend) का नक़्शा
-   ---------------------------------------------------------------------
-   /api/catalog        → सारी किताबों की कीमत + offer (website इसे पढ़ती है)
-   /api/product        → एक किताब की कीमत
-   /api/create-order   → order बनाना (server कीमत तय करता है) + Cashfree session
-   /api/payment-status → पेमेंट जाँचकर download link देना
-   /webhook/cashfree   → Cashfree का "पेमेंट हो गया" संदेश (signature जाँचकर)
-   /download           → token जाँचकर PDF देना (सीमित समय/बार)
-   /api/my-order       → Order ID + email से दोबारा download link
-   /api/admin/*        → admin page के लिए (ADMIN_KEY password से सुरक्षित)
-   Secrets (Cloudflare में): CASHFREE_CLIENT_ID, CASHFREE_CLIENT_SECRET, ADMIN_KEY,
-                             (वैकल्पिक) BREVO_API_KEY, BREVO_SENDER
-   ===================================================================== */
+/* ============================================================
+   ANJAAN MUSAFIR BOOKS — CLOUDFLARE WORKER
+
+   SECTION INDEX
+   ------------------------------------------------------------
+   SECTION 01 — Basic Configuration & CORS
+   SECTION 02 — Response & Utility Helpers
+   SECTION 03 — Security & Validation Helpers
+   SECTION 04 — Cashfree API Connection
+   SECTION 05 — Payment Verification / Webhook Security
+   SECTION 06 — Download Token System
+   SECTION 07 — Paid Order + Email Delivery
+   SECTION 08 — My Order / Re-download
+   SECTION 09 — Price, Offer & Coupon Calculation
+   SECTION 10 — PDF / Book File Delivery
+   SECTION 11 — Create Order & Customer Details
+   SECTION 12 — 100% OFF / ₹0 Free Order Logic
+   SECTION 13 — Payment Status
+   SECTION 14 — Cashfree Webhook
+   SECTION 15 — Product & Catalog
+   SECTION 16 — Admin / Coupon Management
+   SECTION 17 — Main Router / API Routes
+
+   IMPORTANT
+   ------------------------------------------------------------
+   • Existing payment, webhook and download logic is preserved.
+   • Phone validation and D1 phone saving are preserved.
+   • Coupon codes are NOT hard-coded in this Worker.
+   • Coupons are controlled through the D1 coupons table.
+   • 99% coupon → normal Cashfree payment.
+   • 100% coupon → ₹0 order → Cashfree bypass → direct PAID.
+   • Existing markOrderPaidAndToken() is reused for free orders.
+   ============================================================ */
+
+
+/* ============================================================
+   SECTION 01 — BASIC CONFIGURATION & CORS
+   ------------------------------------------------------------
+   इस section में Worker की basic response/CORS settings हैं।
+   Website को Worker API से बात करने की अनुमति यहीं मिलती है।
+   ============================================================ */
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -19,6 +46,14 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   "Content-Type": "application/json; charset=utf-8",
 };
+
+
+/* ============================================================
+   SECTION 02 — RESPONSE & UTILITY HELPERS
+   ------------------------------------------------------------
+   JSON/text response, email cleanup, order ID और encoding जैसे
+   छोटे helper functions यहाँ हैं।
+   ============================================================ */
 
 function json(data, status = 200, extra = {}) {
   return new Response(JSON.stringify(data), {
@@ -46,9 +81,24 @@ function validEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
+
+/* ============================================================
+   SECTION 03 — SECURITY & VALIDATION HELPERS
+   ------------------------------------------------------------
+   Email/mobile validation और आगे आने वाले security helpers का
+   आधार यहाँ है।
+   ============================================================ */
+
 function validPhone(phone) {
   return /^[6-9]\d{9}$/.test(String(phone || ""));
 }
+
+
+/* ============================================================
+   SECTION 04 — CASHFREE API CONNECTION
+   ------------------------------------------------------------
+   Production/Sandbox Cashfree URL, headers और API request helper।
+   ============================================================ */
 
 function cashfreeBase(env) {
   return env.CASHFREE_ENV === "production"
@@ -144,6 +194,14 @@ function constantTimeEqual(a, b) {
   return result === 0;
 }
 
+
+/* ============================================================
+   SECTION 05 — PAYMENT VERIFICATION / WEBHOOK SECURITY
+   ------------------------------------------------------------
+   Cashfree webhook की signature verify की जाती है और payment
+   status को Cashfree से सुरक्षित तरीके से check किया जाता है।
+   ============================================================ */
+
 async function verifyCashfreeWebhook(request, env, rawBody) {
   const timestamp =
     request.headers.get("x-webhook-timestamp") || "";
@@ -203,6 +261,14 @@ async function getOrderPaymentStatus(env, orderId) {
   return "FAILED";
 }
 
+
+/* ============================================================
+   SECTION 06 — DOWNLOAD TOKEN SYSTEM
+   ------------------------------------------------------------
+   Successful order के लिए temporary download token बनता है।
+   Existing token valid हो तो वही reuse होता है।
+   ============================================================ */
+
 async function issueDownloadToken(env, orderId) {
   const existing = await env.DB.prepare(
     "SELECT token, expires_at FROM downloads WHERE order_id = ?1 ORDER BY id DESC LIMIT 1"
@@ -233,6 +299,14 @@ async function issueDownloadToken(env, orderId) {
 
   return token;
 }
+
+
+/* ============================================================
+   SECTION 07 — PAID ORDER + EMAIL DELIVERY
+   ------------------------------------------------------------
+   Order को PAID करना, coupon usage बढ़ाना, download token बनाना
+   और Brevo से delivery email भेजना इसी flow में जुड़ा है।
+   ============================================================ */
 
 async function markOrderPaidAndToken(env, orderId) {
   const order = await env.DB.prepare(
@@ -354,6 +428,12 @@ async function sendOrderEmail(env, order, token) {
 }
 
 
+/* ============================================================
+   SECTION 08 — MY ORDER / RE-DOWNLOAD
+   ------------------------------------------------------------
+   Customer Order ID + email से दोबारा valid download link ले सकता है।
+   ============================================================ */
+
 // ---------- Mera Order: Order ID + email मिलाकर नया download link ----------
 
 async function handleMyOrder(request, env) {
@@ -418,6 +498,13 @@ async function handleMyOrder(request, env) {
   });
 }
 
+
+/* ============================================================
+   SECTION 09 — PRICE, OFFER & COUPON CALCULATION
+   ------------------------------------------------------------
+   Product price, active offer और D1 coupon का final server-side
+   हिसाब यहीं होता है। Customer अपनी price खुद तय नहीं कर सकता।
+   ============================================================ */
 
 /* ======================================================
    भाव (price) तय करने वाला हिस्सा — offer + coupon
@@ -568,9 +655,11 @@ async function priceFor(
     }
   }
 
+  // 100% coupon पर price ₹0 हो सकता है।
+  // बाकी सभी orders में actual discounted amount 그대로 रहेगा।
   const final =
     Math.max(
-      1,
+      0,
       r2(base - discount)
     );
 
@@ -600,7 +689,11 @@ function isAdmin(request, env) {
       env.ADMIN_KEY
     );
 }
-
+/* ============================================================
+   SECTION 10 — PDF / BOOK FILE DELIVERY
+   ------------------------------------------------------------
+   Book file पहले R2 से और जरूरत पड़ने पर Static Assets से खोजी जाती है।
+   ============================================================ */
 
 // PDF लाना: पहले R2, वरना Static Assets
 
@@ -653,6 +746,13 @@ async function fetchBookFile(
   return null;
 }
 
+
+/* ============================================================
+   SECTION 11 — CREATE ORDER & CUSTOMER DETAILS
+   ------------------------------------------------------------
+   Customer details validate होती हैं, product/coupon price निकलती है
+   और normal paid order के लिए Cashfree session बनाया जाता है।
+   ============================================================ */
 
 async function handleCreateOrder(
   request,
@@ -759,6 +859,73 @@ async function handleCreateOrder(
       },
       400
     );
+  }
+
+
+  /* ============================================================
+     SECTION 12 — 100% OFF / ₹0 FREE ORDER LOGIC
+     ------------------------------------------------------------
+     केवल valid coupon की वजह से price ₹0 होने पर यह रास्ता चलेगा।
+     इससे बिना coupon कोई accidental free order नहीं बनेगा।
+
+     Flow:
+     1. D1 में order CREATED save
+     2. Coupon details save
+     3. Existing PAID/token/email logic reuse
+     4. Cashfree को call नहीं किया जाएगा
+     ============================================================ */
+
+  if (pr.final === 0 && pr.coupon) {
+    const freeOrderId =
+      makeOrderId();
+
+    await env.DB.prepare(
+      `INSERT INTO orders
+        (order_id, product_id, customer_name, customer_email, customer_phone, amount, payment_status)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'CREATED')`
+    ).bind(
+      freeOrderId,
+      productId,
+      name,
+      email,
+      phone || null,
+      0
+    ).run();
+
+    try {
+      await env.DB.prepare(
+        "INSERT OR REPLACE INTO order_discounts (order_id, coupon_code, original_price, discount_amount) VALUES (?1, ?2, ?3, ?4)"
+      ).bind(
+        freeOrderId,
+        pr.coupon,
+        pr.base,
+        pr.discount
+      ).run();
+    } catch (e) {
+      console.error(e);
+    }
+
+    // Existing delivery system ही इस्तेमाल होगा।
+    const token =
+      await markOrderPaidAndToken(
+        env,
+        freeOrderId
+      );
+
+    return json({
+      order_id:
+        freeOrderId,
+
+      free: true,
+
+      amount: 0,
+
+      product_name:
+        product.name,
+
+      download_url:
+        `${env.WORKER_PUBLIC_URL.replace(/\/$/, "")}/download?token=${encodeURIComponent(token)}`
+    });
   }
 
 
@@ -898,6 +1065,13 @@ async function handleCreateOrder(
 }
 
 
+/* ============================================================
+   SECTION 13 — PAYMENT STATUS
+   ------------------------------------------------------------
+   Cashfree से order का current payment status check होता है।
+   SUCCESS होने पर existing PAID + token + email flow चलता है।
+   ============================================================ */
+
 async function handlePaymentStatus(
   request,
   env
@@ -995,6 +1169,13 @@ async function handlePaymentStatus(
 }
 
 
+/* ============================================================
+   SECTION 14 — CASHFREE WEBHOOK
+   ------------------------------------------------------------
+   Cashfree webhook आने पर signature verify करके payment status
+   दोबारा Cashfree से confirm किया जाता है।
+   ============================================================ */
+
 async function handleWebhook(
   request,
   env
@@ -1085,7 +1266,12 @@ async function handleWebhook(
     200
   );
 }
-
+/* ============================================================
+   SECTION 10 — DOWNLOAD REQUEST / PDF DELIVERY
+   ------------------------------------------------------------
+   Customer के token को verify करके PDF download कराया जाता है।
+   Token expiry और maximum download limit दोनों check होते हैं।
+   ============================================================ */
 
 async function handleDownload(
   request,
@@ -1224,6 +1410,13 @@ async function handleDownload(
 }
 
 
+/* ============================================================
+   SECTION 15 — PRODUCT & CATALOG
+   ------------------------------------------------------------
+   Website के लिए individual product और पूरी active catalog की
+   current price/offer information यहाँ से आती है।
+   ============================================================ */
+
 async function handleProduct(
   request,
   env
@@ -1327,6 +1520,14 @@ async function handleCatalog(
   );
 }
 
+
+/* ============================================================
+   SECTION 16 — ADMIN / COUPON MANAGEMENT
+   ------------------------------------------------------------
+   Admin key से protected routes।
+   Product price, offer और coupon create/update/delete यहीं manage होते हैं।
+   Coupon code यहाँ hard-code नहीं है; D1 में जो code बनाया जाएगा वही चलेगा।
+   ============================================================ */
 
 // ADMIN
 
@@ -1602,9 +1803,7 @@ async function handleAdmin(
       ok: true
     });
   }
-
-
-  if (
+     if (
     path ===
     "/api/admin/coupon-delete"
   ) {
@@ -1632,6 +1831,13 @@ async function handleAdmin(
   );
 }
 
+
+/* ============================================================
+   SECTION 17 — MAIN ROUTER / API ROUTES
+   ------------------------------------------------------------
+   Worker में आने वाली सभी API requests को उनके सही handler तक
+   पहुँचाने का काम यहाँ होता है।
+   ============================================================ */
 
 export default {
   async fetch(
