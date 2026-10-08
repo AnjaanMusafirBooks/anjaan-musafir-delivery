@@ -138,8 +138,39 @@ async function cfFetch(env, path, options = {}) {
   return { res, data };
 }
 
-function makeOrderId() {
-  return `AMB_${Date.now()}_${crypto.randomUUID().replaceAll("-", "").slice(0, 10)}`;
+async function makeOrderId(env) {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+
+  const get = (type) => parts.find(p => p.type === type)?.value || "";
+  const day = get("day");
+  const month = get("month").toUpperCase();
+  const year = get("year");
+  const hour = get("hour");
+  const minute = get("minute");
+  const dateKey = `${day}${month}${year}`;
+  const prefix = `${dateKey}-`;
+
+  const dailyRow = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM orders WHERE order_id LIKE ?1"
+  ).bind(`${prefix}%`).first();
+
+  const lifetimeRow = await env.DB.prepare(
+    "SELECT COUNT(*) AS count FROM orders"
+  ).first();
+
+  const dailyNumber = Number(dailyRow?.count || 0) + 1;
+  const lifetimeNumber = Number(lifetimeRow?.count || 0) + 1;
+
+  return `${dateKey}-${hour}${minute}-${String(dailyNumber).padStart(4, "0")}-${String(lifetimeNumber).padStart(5, "0")}`;
 }
 
 function bytesToBase64(bytes) {
@@ -181,7 +212,6 @@ async function hmacSha256Base64(secret, message) {
 
   return bytesToBase64(new Uint8Array(sig));
 }
-
 function constantTimeEqual(a, b) {
   if (!a || !b || a.length !== b.length) return false;
 
@@ -399,7 +429,7 @@ async function sendOrderEmail(env, order, token) {
               order.order_id,
 
             amount:
-              Number(order.amount || 0),
+              Number(order.final_price || 0),
 
             download_url:
               downloadUrl
@@ -425,9 +455,7 @@ async function sendOrderEmail(env, order, token) {
       e
     );
   }
-}
-
-
+      }
 /* ============================================================
    SECTION 08 — MY ORDER / RE-DOWNLOAD
    ------------------------------------------------------------
@@ -877,19 +905,23 @@ async function handleCreateOrder(
 
   if (pr.final === 0 && pr.coupon) {
     const freeOrderId =
-      makeOrderId();
+      await makeOrderId(env);
 
     await env.DB.prepare(
       `INSERT INTO orders
-        (order_id, product_id, customer_name, customer_email, customer_phone, amount, payment_status)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'CREATED')`
+        (customer_name, customer_phone, customer_email, order_id, product_id, regular_price, current_price, discount_price, final_price, coupon_code, payment_status)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'CREATED')`
     ).bind(
+      name,
+      phone,
+      email,
       freeOrderId,
       productId,
-      name,
-      email,
-      phone || null,
-      0
+      pr.mrp != null ? Number(pr.mrp) : Number(product.base_price ?? product.price),
+      Number(pr.base),
+      Number(pr.discount),
+      0,
+      pr.coupon || null
     ).run();
 
     try {
@@ -930,7 +962,7 @@ async function handleCreateOrder(
 
 
   const orderId =
-    makeOrderId();
+    await makeOrderId(env);
 
   const returnUrl =
     `${env.FRONTEND_URL.replace(/\/$/, "")}/?payment=return&order_id=${encodeURIComponent(orderId)}`;
@@ -999,8 +1031,6 @@ async function handleCreateOrder(
           ),
       }
     );
-
-
   if (!res.ok) {
     console.error(
       "Cashfree order creation failed:",
@@ -1020,15 +1050,19 @@ async function handleCreateOrder(
 
   await env.DB.prepare(
     `INSERT INTO orders
-      (order_id, product_id, customer_name, customer_email, customer_phone, amount, payment_status)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'CREATED')`
+      (customer_name, customer_phone, customer_email, order_id, product_id, regular_price, current_price, discount_price, final_price, coupon_code, payment_status)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'CREATED')`
   ).bind(
+    name,
+    phone,
+    email,
     orderId,
     productId,
-    name,
-    email,
-    phone || null,
-    pr.final
+    pr.mrp != null ? Number(pr.mrp) : Number(product.base_price ?? product.price),
+    Number(pr.base),
+    Number(pr.discount),
+    Number(pr.final),
+    pr.coupon || null
   ).run();
 
 
@@ -1518,9 +1552,7 @@ async function handleCatalog(
         "public, max-age=30"
     }
   );
-}
-
-
+       }
 /* ============================================================
    SECTION 16 — ADMIN / COUPON MANAGEMENT
    ------------------------------------------------------------
@@ -1702,8 +1734,6 @@ async function handleAdmin(
       ok: true
     });
   }
-
-
   if (
     path ===
     "/api/admin/coupon"
@@ -1803,7 +1833,9 @@ async function handleAdmin(
       ok: true
     });
   }
-     if (
+
+
+  if (
     path ===
     "/api/admin/coupon-delete"
   ) {
@@ -1874,8 +1906,6 @@ export default {
           "MISSING"
       });
     }
-
-
     if (
       request.method ===
       "OPTIONS"
