@@ -1056,13 +1056,16 @@ async function handleCreateOrder(
     Mobile number D1 में भी save होगा
     और Cashfree customer details में भी जाएगा।
   */
-
+const cashfreeAmount =
+  pr.final > 0 && pr.final < 1
+    ? 1
+    : pr.final;
   const cfPayload = {
     order_id:
       orderId,
 
     order_amount:
-      pr.final,
+      cashfreeAmount,
 
     order_currency:
       "INR",
@@ -1144,7 +1147,7 @@ async function handleCreateOrder(
     pr.mrp != null ? Number(pr.mrp) : Number(product.base_price ?? product.price),
     Number(pr.base),
     Number(pr.discount),
-    Number(pr.final),
+    Number(cashfreeAmount),
     pr.coupon || null
   ).run();
 
@@ -1169,11 +1172,11 @@ async function handleCreateOrder(
   return json({
     order_id: orderId,
     payment_session_id: data.payment_session_id,
-    amount: pr.final,
+    amount: cashfreeAmount,
     regular_price: pr.mrp != null ? Number(pr.mrp) : Number(product.base_price ?? product.price),
     current_price: Number(pr.base),
     discount_price: Number(pr.discount),
-    final_price: Number(pr.final),
+    final_price: Number(cashfreeAmount),
     coupon_code: pr.coupon || null,
     product_name: product.name,
   });
