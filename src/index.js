@@ -708,13 +708,16 @@ async function priceFor(
     }
   }
 
-  // 100% coupon पर price ₹0 हो सकता है।
-  // बाकी सभी orders में actual discounted amount 그대로 रहेगा।
-  const final =
-    Math.max(
-      0,
-      r2(base - discount)
-    );
+  // 100% coupon पर price ₹0 रहेगा।
+  // ₹0 से अधिक और ₹1 से कम price को ₹1 करें।
+  let final = Math.max(
+    0,
+    r2(base - discount)
+  );
+
+  if (final > 0 && final < 1) {
+    final = 1;
+  }
 
   return {
     base,
