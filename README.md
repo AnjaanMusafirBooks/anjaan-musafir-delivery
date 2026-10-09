@@ -184,3 +184,7 @@ This is the core payment + delivery system. It does NOT yet include:
 
 Those can be added after the core flow is live.
 Cloudflare deployment connected.
+
+
+## Dynamic Site Content Manager (additive)
+See `SITE_CONTENT_SETUP.md`. Run `db/migrations/001_site_content.sql` once on the existing D1 database after backing it up, then deploy the updated Worker and upload the updated frontend. This adds editable published/draft content for Terms, Privacy, Refund, About, Vision, Contact, announcement and footer details without altering payment/order/download tables.
