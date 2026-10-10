@@ -1,3 +1,5 @@
+import { handleAdminAuth } from "./admin-auth.js";
+
 /* ============================================================
    ANJAAN MUSAFIR BOOKS — CLOUDFLARE WORKER
 
@@ -2199,6 +2201,12 @@ export default {
           // Static HTML remains the fallback until the one-time D1 migration is installed.
           return json({ ok: false, content: {}, message: "Site content is using the static fallback." }, 200, { "Cache-Control": "no-store" });
         }
+      }
+
+      // New Version authentication endpoints are isolated under /api/v2/admin/.
+      // Legacy /api/admin routes remain unchanged during the staged migration and are NOT yet RBAC-protected.
+      if (url.pathname.startsWith("/api/v2/admin/")) {
+        return await handleAdminAuth(request, env, url);
       }
 
       if (
