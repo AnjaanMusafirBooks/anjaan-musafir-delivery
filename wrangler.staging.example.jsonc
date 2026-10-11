@@ -1,0 +1,31 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "anjaan-musafir-delivery-staging",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-04",
+  "vars": {
+    "APP_ENV": "staging",
+    "CASHFREE_ENV": "sandbox",
+    "FRONTEND_URL": "https://REPLACE-WITH-STAGING-FRONTEND-URL",
+    "WORKER_PUBLIC_URL": "https://REPLACE-WITH-STAGING-WORKER.workers.dev",
+    "MAX_DOWNLOADS": "3"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "REPLACE-WITH-SEPARATE-STAGING-D1-NAME",
+      "database_id": "REPLACE-WITH-SEPARATE-STAGING-D1-ID"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "BOOKS_BUCKET",
+      "bucket_name": "REPLACE-WITH-PRIVATE-STAGING-BOOKS-BUCKET"
+    }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  }
+}
