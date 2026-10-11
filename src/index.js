@@ -409,7 +409,10 @@ async function reserveCouponForOrder(env, orderId, couponCode) {
   } catch (error) {
     // Compensate if reservation row creation fails after the capacity increment.
     await env.DB.prepare(
-      `UPDATE coupons SET reserved_count = MAX(0, reserved_count - 1) WHERE code = ?1`
+      `UPDATE coupons
+SET reserved_count = reserved_count - 1
+WHERE code = ?1
+  AND reserved_count > 0`
     ).bind(code).run();
     throw error;
   }
