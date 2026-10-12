@@ -1944,7 +1944,23 @@ async function handleAdmin(
       }
     } catch (e) { /* migration not installed yet */ }
 
-    return json({ products, offers, coupons, combos });
+    let orders = [];
+    try {
+      orders = (await env.DB.prepare(
+        `SELECT o.order_id,o.product_id,o.combo_id,o.customer_name,o.customer_phone,o.customer_email,
+                o.regular_price,o.current_price,o.discount_price,o.final_price,o.coupon_code,o.payment_status,o.paid_at,
+                p.name AS product_name, co.name AS combo_name,
+                (SELECT GROUP_CONCAT(p2.name, ', ')
+                   FROM order_items oi JOIN products p2 ON p2.product_id=oi.product_id
+                  WHERE oi.order_id=o.order_id) AS item_names
+           FROM orders o
+           LEFT JOIN products p ON p.product_id=o.product_id
+           LEFT JOIN combo_offers co ON co.combo_id=o.combo_id
+          ORDER BY COALESCE(o.paid_at,'') DESC, o.rowid DESC LIMIT 100`
+      ).all()).results || [];
+    } catch (e) { /* Keep other admin tools usable if the combo migration is not installed. */ }
+
+    return json({ products, offers, coupons, combos, orders });
   }
 
 
@@ -1980,7 +1996,7 @@ async function handleAdmin(
 
 
   if (path === "/api/admin/combo-save") {
-    const comboId = String(b.combo_id || ("COMBO_" + crypto.randomUUID().replaceAll("-", "").slice(0,16).toUpperCase())).trim();
+    const comboId = String(b.combo_id || ("COMBO_" + crypto.randomUUID().replaceAll("-", "").slice(0,16).toUpperCase())).trim().toUpperCase();
     const name = String(b.name || "").trim().slice(0,100);
     const description = String(b.description || "").trim().slice(0,1000);
     const comboPrice = Number(b.combo_price);
