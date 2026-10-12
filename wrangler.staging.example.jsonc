@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "anjaan-musafir-delivery-staging",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-04",
+  "vars": {
+    "CASHFREE_ENV": "sandbox",
+    "FRONTEND_URL": "REPLACE_WITH_STAGING_FRONTEND_URL",
+    "WORKER_PUBLIC_URL": "REPLACE_WITH_STAGING_WORKER_URL",
+    "MAX_DOWNLOADS": "3"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "anjaan-musafir-staging-db",
+      "database_id": "REPLACE_WITH_STAGING_D1_DATABASE_ID"
+    }
+  ],
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  }
+}
