@@ -393,10 +393,6 @@ async function sendOrderEmail(env, order, token) {
     const p = await env.DB.prepare(
       "SELECT name FROM products WHERE product_id = ?1"
     ).bind(order.product_id).first();
-
-    const downloadUrl =
-      `${env.WORKER_PUBLIC_URL.replace(/\/$/, "")}/download?token=${encodeURIComponent(token)}`;
-
     const safe = (value) =>
       String(value == null ? "" : value).replace(/[&<>"']/g, (c) => ({
         "&": "&amp;",
@@ -405,6 +401,11 @@ async function sendOrderEmail(env, order, token) {
         '"': "&quot;",
         "'": "&#39;"
       })[c]);
+    const comboItems = order.combo_id ? await getOrderDownloadItems(env, order.order_id, token) : [];
+    const combo = order.combo_id ? await env.DB.prepare("SELECT name FROM combo_offers WHERE combo_id=?1 LIMIT 1").bind(order.combo_id).first() : null;
+    const downloadUrl = `${env.WORKER_PUBLIC_URL.replace(/\/$/, "")}/download?token=${encodeURIComponent(token)}`;
+    const linksHtml = comboItems.length ? '<p>Your combo includes:</p><ul>' + comboItems.map(item => `<li><a href="${safe(item.download_url)}">Download ${safe(item.name)}</a></li>`).join("") + '</ul>' : `<p><a href="${safe(downloadUrl)}">Download eBook</a></p>`;
+    const purchasedTitle = order.combo_id ? (combo?.name || "Your eBook combo") : (p ? p.name : "your eBook");
 
     const senderEmail =
       env.BREVO_SENDER || "officialsuperswagg@gmail.com";
@@ -431,10 +432,10 @@ async function sendOrderEmail(env, order, token) {
           htmlContent:
             `<div style="font-family:Arial,sans-serif;line-height:1.6;color:#101a26;max-width:600px;margin:auto">` +
             `<h2 style="color:#0b1426">Congratulations, ${safe(order.customer_name || "")}!</h2>` +
-            `<p>Your eBook <strong>${safe(p ? p.name : "")}</strong> is ready.</p>` +
+            `<p><strong>${safe(purchasedTitle)}</strong> is ready.</p>` +
             `<p><strong>Order ID:</strong> ${safe(order.order_id)}</p>` +
             `<p><strong>Amount Paid:</strong> ₹${Number(order.final_price || 0).toFixed(2)}</p>` +
-            `<p><a href="${safe(downloadUrl)}" style="display:inline-block;background:#c9a45c;color:#0b1426;text-decoration:none;padding:12px 20px;border-radius:8px;font-weight:bold">Download eBook</a></p>` +
+            linksHtml +
             `<p style="color:#5b6572;font-size:13px">Download link सीमित समय और download attempts के लिए है।</p>` +
             `</div>`
         })
@@ -528,9 +529,12 @@ async function handleMyOrder(request, env) {
     "SELECT name FROM products WHERE product_id = ?1 LIMIT 1"
   ).bind(o.product_id).first();
 
+  const comboDownloadItems = o.combo_id ? await getOrderDownloadItems(env, orderId, token) : [];
   return json({
     ok: true,
     order_id: orderId,
+    combo_id: o.combo_id || null,
+    download_items: comboDownloadItems,
     product_id: o.product_id,
     product_name: myProduct?.name || "",
     regular_price: Number(o.regular_price || 0),
@@ -540,8 +544,8 @@ async function handleMyOrder(request, env) {
     coupon_code: o.coupon_code || null,
     download_url:
       `${env.WORKER_PUBLIC_URL.replace(/\/$/, "")}/download?token=${encodeURIComponent(token)}`,
-    downloads_used: usedDownloads,
-    downloads_remaining: remainingDownloads,
+    downloads_used: o.combo_id ? null : usedDownloads,
+    downloads_remaining: o.combo_id ? null : remainingDownloads,
     max_downloads: maxDownloads,
     expires_at: latestDownload?.expires_at || null
   });
@@ -883,6 +887,10 @@ async function handleCreateOrder(
       },
       400
     );
+  }
+
+  if (body.combo_id) {
+    return await handleCreateComboOrder(request, env, body);
   }
 
   const productId =
@@ -1264,9 +1272,12 @@ async function handlePaymentStatus(
     const paidMaxDownloads = Number(env.MAX_DOWNLOADS || 3);
     const paidUsedDownloads = Number(paidDownload?.download_count || 0);
 
+    const comboDownloadItems = order.combo_id ? await getOrderDownloadItems(env, orderId, token) : [];
     return json({
       order_id: orderId,
       status: "PAID",
+      combo_id: order.combo_id || null,
+      download_items: comboDownloadItems,
       product_id: order.product_id,
       product_name: product?.name || "",
       regular_price: Number(order.regular_price || 0),
@@ -1436,24 +1447,31 @@ async function handleDownload(
   }
 
 
-  const row =
-    await env.DB.prepare(
-      `SELECT d.*, o.payment_status, o.product_id, p.file_key, p.file_name, p.name
-       FROM downloads d
-       JOIN orders o ON o.order_id = d.order_id
-       JOIN products p ON p.product_id = o.product_id
-       WHERE d.token = ?1
-       LIMIT 1`
-    ).bind(token).first();
+  const row = await env.DB.prepare(
+    `SELECT d.*, o.payment_status, o.product_id, o.combo_id
+     FROM downloads d JOIN orders o ON o.order_id=d.order_id
+     WHERE d.token=?1 LIMIT 1`
+  ).bind(token).first();
 
+  if (!row) return text("Invalid download link.",404);
 
-  if (!row) {
-    return text(
-      "Invalid download link.",
-      404
-    );
+  const requestedBookId = String(url.searchParams.get("book_id") || "").trim();
+  let book = null;
+  let itemRow = null;
+  if (row.combo_id) {
+    if (!requestedBookId) return text("इस कॉम्बो के लिए किताब चुनने हेतु Mera Order से लिंक खोलें।",400);
+    itemRow = await env.DB.prepare(
+      `SELECT oi.product_id,oi.download_count,p.file_key,p.file_name,p.name
+       FROM order_items oi JOIN products p ON p.product_id=oi.product_id
+       WHERE oi.order_id=?1 AND oi.product_id=?2 LIMIT 1`
+    ).bind(row.order_id,requestedBookId).first();
+    if (!itemRow) return text("यह किताब इस ऑर्डर में शामिल नहीं है।",403);
+    book = itemRow;
+  } else {
+    book = await env.DB.prepare("SELECT product_id,file_key,file_name,name FROM products WHERE product_id=?1 LIMIT 1").bind(row.product_id).first();
+    if (requestedBookId && requestedBookId !== row.product_id) return text("यह किताब इस ऑर्डर में शामिल नहीं है।",403);
   }
-
+  if (!book) return text("File not found.",404);
 
   if (
     row.payment_status !==
@@ -1484,10 +1502,8 @@ async function handleDownload(
     );
 
 
-  if (
-    Number(row.download_count) >=
-    maxDownloads
-  ) {
+  const downloadsUsed = row.combo_id ? Number(itemRow.download_count || 0) : Number(row.download_count || 0);
+  if (downloadsUsed >= maxDownloads) {
     return text(
       "Download limit reached.",
       429
@@ -1499,7 +1515,7 @@ async function handleDownload(
     await fetchBookFile(
       env,
       request,
-      row.file_key
+      book.file_key
     );
 
 
@@ -1511,9 +1527,11 @@ async function handleDownload(
   }
 
 
-  await env.DB.prepare(
-    "UPDATE downloads SET download_count = download_count + 1, last_download_at = CURRENT_TIMESTAMP WHERE id = ?1"
-  ).bind(row.id).run();
+  if (row.combo_id) {
+    await env.DB.prepare("UPDATE order_items SET download_count=download_count+1,last_download_at=CURRENT_TIMESTAMP WHERE order_id=?1 AND product_id=?2").bind(row.order_id,requestedBookId).run();
+  } else {
+    await env.DB.prepare("UPDATE downloads SET download_count = download_count + 1, last_download_at = CURRENT_TIMESTAMP WHERE id = ?1").bind(row.id).run();
+  }
 
 
   const headers =
@@ -1528,7 +1546,7 @@ async function handleDownload(
 
   headers.set(
     "Content-Disposition",
-    `attachment; filename="${String(row.file_name || "ebook.pdf").replace(/["\r\n]/g, "")}"`
+    `attachment; filename="${String(book.file_name || "ebook.pdf").replace(/["\r\n]/g, "")}"`
   );
 
 
@@ -1552,6 +1570,131 @@ async function handleDownload(
   );
 }
 
+
+/* ============================================================
+   COMBO OFFERS — additive feature
+   Existing single-book flow remains in handleCreateOrder unchanged.
+   ============================================================ */
+async function getComboItems(env, comboId) {
+  const rows = (await env.DB.prepare(
+    `SELECT p.product_id, p.name, p.price, p.active, ci.position
+     FROM combo_items ci JOIN products p ON p.product_id=ci.product_id
+     WHERE ci.combo_id=?1 ORDER BY ci.position, p.name`
+  ).bind(comboId).all()).results || [];
+  return rows;
+}
+
+async function comboPublicRecord(env, combo) {
+  const items = await getComboItems(env, combo.combo_id);
+  // Never show or sell a partial combo: every mapped book must still be active.
+  if (!items.length || items.some(p => Number(p.active) !== 1)) return null;
+  let totalMrp = 0, totalCurrent = 0;
+  const mapped = [];
+  for (const p of items) {
+    const pr = await priceFor(env, p, null);
+    const current = Number(pr.base || 0);
+    const mrp = Number(pr.mrp != null ? pr.mrp : p.price);
+    totalMrp += mrp; totalCurrent += current;
+    mapped.push({ product_id:p.product_id, name:p.name, mrp, current_price:current });
+  }
+  return {
+    combo_id: combo.combo_id, name: combo.name, description: combo.description || '',
+    combo_price: Number(combo.combo_price), active: !!combo.active,
+    items: mapped, book_count: mapped.length,
+    total_mrp: r2(totalMrp), total_current_price: r2(totalCurrent),
+    normal_discount_percent: totalMrp > 0 ? r2(Math.max(0,(totalMrp-totalCurrent)/totalMrp*100)) : 0,
+    extra_discount_percent: totalCurrent > 0 && Number(combo.combo_price) < totalCurrent ? r2((totalCurrent-Number(combo.combo_price))/totalCurrent*100) : 0,
+    total_discount_percent: totalMrp > 0 && Number(combo.combo_price) < totalMrp ? r2((totalMrp-Number(combo.combo_price))/totalMrp*100) : 0,
+    extra_savings: r2(Math.max(0,totalCurrent-Number(combo.combo_price))),
+    total_savings: r2(Math.max(0,totalMrp-Number(combo.combo_price)))
+  };
+}
+
+async function handleCombos(env) {
+  try {
+    const rows = (await env.DB.prepare(
+      "SELECT * FROM combo_offers WHERE active=1 ORDER BY created_at DESC"
+    ).all()).results || [];
+    const combos = [];
+    for (const row of rows) {
+      const item = await comboPublicRecord(env, row);
+      if (item && item.book_count > 0) combos.push(item);
+    }
+    return json({ok:true, combos}, 200, {"Cache-Control":"no-store"});
+  } catch (e) {
+    console.error("combo catalog unavailable", e);
+    return json({ok:false, combos:[], error:"Combo feature database migration is not installed."}, 503);
+  }
+}
+
+async function getOrderDownloadItems(env, orderId, token) {
+  const rows = (await env.DB.prepare(
+    `SELECT oi.product_id, p.name, p.file_name, oi.download_count
+     FROM order_items oi JOIN products p ON p.product_id=oi.product_id
+     WHERE oi.order_id=?1 ORDER BY oi.rowid`
+  ).bind(orderId).all()).results || [];
+  if (!rows.length) return [];
+  return rows.map(p => ({
+    product_id:p.product_id, name:p.name,
+    download_url:`${env.WORKER_PUBLIC_URL.replace(/\/$/, "")}/download?token=${encodeURIComponent(token)}&book_id=${encodeURIComponent(p.product_id)}`,
+    downloads_used:Number(p.download_count||0), max_downloads:Number(env.MAX_DOWNLOADS||3)
+  }));
+}
+
+async function handleCreateComboOrder(request, env, body) {
+  const comboId = String(body.combo_id || "").trim();
+  const name = String(body.name || "").trim().slice(0,100);
+  const email = cleanEmail(body.email);
+  const phone = String(body.phone || "").replace(/\D/g, "");
+  if (!comboId || !name || !validEmail(email) || !validPhone(phone)) {
+    return json({error:"Combo, नाम, सही email और 10 अंकों का मोबाइल नंबर जरूरी है।"},400);
+  }
+  const combo = await env.DB.prepare(
+    "SELECT * FROM combo_offers WHERE combo_id=?1 AND active=1 LIMIT 1"
+  ).bind(comboId).first();
+  if (!combo) return json({error:"यह कॉम्बो उपलब्ध नहीं है।"},404);
+  const products = await getComboItems(env, comboId);
+  if (!products.length || products.some(p=>!p.active)) return json({error:"कॉम्बो की एक या अधिक किताबें उपलब्ध नहीं हैं।"},409);
+  let totalMrp=0, totalCurrent=0;
+  for (const p of products) {
+    const pr=await priceFor(env,p,null);
+    totalMrp += Number(pr.mrp != null ? pr.mrp : p.price);
+    totalCurrent += Number(pr.base || 0);
+  }
+  totalMrp=r2(totalMrp); totalCurrent=r2(totalCurrent);
+  const finalPrice=r2(Number(combo.combo_price));
+  if (!Number.isFinite(finalPrice) || finalPrice < 1) return json({error:"कॉम्बो कीमत कम से कम ₹1 होनी चाहिए।"},400);
+  const orderId=await makeOrderId(env);
+  const firstProduct=products[0];
+  const returnUrl=`${env.FRONTEND_URL.replace(/\/$/, "")}/?payment=return&order_id=${encodeURIComponent(orderId)}`;
+  const notifyUrl=`${env.WORKER_PUBLIC_URL.replace(/\/$/, "")}/webhook/cashfree`;
+  const cfPayload={
+    order_id:orderId, order_amount:finalPrice, order_currency:"INR",
+    customer_details:{customer_id:`cust_${crypto.randomUUID().replaceAll("-","").slice(0,18)}`,customer_name:name,customer_email:email,customer_phone:phone},
+    order_meta:{return_url:returnUrl,notify_url:notifyUrl},
+    order_note:`Combo: ${combo.name}`
+  };
+  const {res,data}=await cfFetch(env,"/orders",{method:"POST",headers:{"x-idempotency-key":crypto.randomUUID()},body:JSON.stringify(cfPayload)});
+  if (!res.ok) {
+    console.error("Cashfree combo order failed:",res.status,data);
+    return json({error:"पेमेंट सेवा अभी उपलब्ध नहीं है। थोड़ी देर बाद कोशिश करें।"},502);
+  }
+  try {
+    const statements = [env.DB.prepare(
+      `INSERT INTO orders (customer_name,customer_phone,customer_email,order_id,product_id,combo_id,regular_price,current_price,discount_price,final_price,coupon_code,payment_status)
+       VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,NULL,'CREATED')`
+    ).bind(name,phone,email,orderId,firstProduct.product_id,comboId,totalMrp,totalCurrent,r2(totalCurrent-finalPrice),finalPrice)];
+    for (let i=0;i<products.length;i++) {
+      statements.push(env.DB.prepare("INSERT INTO order_items(order_id,product_id) VALUES(?1,?2)").bind(orderId,products[i].product_id));
+    }
+    // D1 batch is atomic: never leave an order with only some of its book mappings.
+    await env.DB.batch(statements);
+  } catch(e) {
+    console.error("Could not persist combo order",e);
+    return json({error:"ऑर्डर सुरक्षित नहीं हो पाया। कृपया दोबारा प्रयास करें।"},500);
+  }
+  return json({order_id:orderId,payment_session_id:data.payment_session_id,amount:finalPrice,regular_price:totalMrp,current_price:totalCurrent,discount_price:r2(totalCurrent-finalPrice),final_price:finalPrice,product_name:combo.name,combo_id:comboId,book_count:products.length});
+}
 
 /* ============================================================
    SECTION 15 — PRODUCT & CATALOG
@@ -1792,12 +1935,16 @@ async function handleAdmin(
         ).all()
       ).results;
 
+    let combos = [];
+    try {
+      const comboRows = (await env.DB.prepare("SELECT * FROM combo_offers ORDER BY created_at DESC").all()).results || [];
+      for (const c of comboRows) {
+        const ids = (await env.DB.prepare("SELECT product_id FROM combo_items WHERE combo_id=?1 ORDER BY position").bind(c.combo_id).all()).results || [];
+        combos.push({...c, active:!!c.active, product_ids:ids.map(x=>x.product_id)});
+      }
+    } catch (e) { /* migration not installed yet */ }
 
-    return json({
-      products,
-      offers,
-      coupons
-    });
+    return json({ products, offers, coupons, combos });
   }
 
 
@@ -1831,6 +1978,39 @@ async function handleAdmin(
     );
   }
 
+
+  if (path === "/api/admin/combo-save") {
+    const comboId = String(b.combo_id || ("COMBO_" + crypto.randomUUID().replaceAll("-", "").slice(0,16).toUpperCase())).trim();
+    const name = String(b.name || "").trim().slice(0,100);
+    const description = String(b.description || "").trim().slice(0,1000);
+    const comboPrice = Number(b.combo_price);
+    const ids = Array.isArray(b.product_ids) ? [...new Set(b.product_ids.map(x=>String(x||"").trim()).filter(Boolean))] : [];
+    if (!/^[A-Z0-9_-]{3,64}$/.test(comboId) || !name || !Number.isFinite(comboPrice) || comboPrice < 1 || ids.length < 1) {
+      return json({error:"कॉम्बो नाम, कम से कम एक किताब और ₹1 या अधिक Combo Price जरूरी है।"},400);
+    }
+    const placeholders = ids.map((_,i)=>"?"+(i+1)).join(",");
+    const validProducts = (await env.DB.prepare(`SELECT product_id FROM products WHERE active=1 AND product_id IN (${placeholders})`).bind(...ids).all()).results || [];
+    if (validProducts.length !== ids.length) return json({error:"चुनी गई एक या अधिक किताबें मौजूद या सक्रिय नहीं हैं।"},400);
+    const statements = [
+      env.DB.prepare(`INSERT INTO combo_offers(combo_id,name,description,combo_price,active,updated_at)
+        VALUES(?1,?2,?3,?4,?5,CURRENT_TIMESTAMP)
+        ON CONFLICT(combo_id) DO UPDATE SET name=excluded.name,description=excluded.description,combo_price=excluded.combo_price,active=excluded.active,updated_at=CURRENT_TIMESTAMP`)
+        .bind(comboId,name,description,r2(comboPrice),b.active===false?0:1),
+      env.DB.prepare("DELETE FROM combo_items WHERE combo_id=?1").bind(comboId)
+    ];
+    for (let i=0;i<ids.length;i++) statements.push(env.DB.prepare("INSERT INTO combo_items(combo_id,product_id,position) VALUES(?1,?2,?3)").bind(comboId,ids[i],i));
+    // Save metadata and all book mappings as one atomic D1 batch.
+    await env.DB.batch(statements);
+    return json({ok:true,combo_id:comboId});
+  }
+
+  if (path === "/api/admin/combo-delete") {
+    const id=String(b.combo_id||"").trim();
+    if (!id) return json({error:"combo_id जरूरी है।"},400);
+    // Soft-disable so old orders and their download mapping remain intact.
+    await env.DB.prepare("UPDATE combo_offers SET active=0,updated_at=CURRENT_TIMESTAMP WHERE combo_id=?1").bind(id).run();
+    return json({ok:true});
+  }
 
   if (
     path ===
@@ -2148,6 +2328,10 @@ export default {
         );
       }
 
+
+      if (request.method === "GET" && url.pathname === "/api/combos") {
+        return await handleCombos(env);
+      }
 
       if (
         request.method === "GET" &&
