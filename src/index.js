@@ -1958,9 +1958,7 @@ async function handleAdmin(
            LEFT JOIN combo_offers co ON co.combo_id=o.combo_id
           ORDER BY COALESCE(o.paid_at,'') DESC, o.rowid DESC LIMIT 100`
       ).all()).results || [];
-   } catch (e) {
-  console.error("ADMIN ORDERS QUERY FAILED:", e?.message || e);
-}
+    } catch (e) { /* Keep other admin tools usable if the combo migration is not installed. */ }
 
     return json({ products, offers, coupons, combos, orders });
   }
@@ -2020,6 +2018,31 @@ async function handleAdmin(
     // Save metadata and all book mappings as one atomic D1 batch.
     await env.DB.batch(statements);
     return json({ok:true,combo_id:comboId});
+  }
+
+  if (path === "/api/admin/product-save") {
+    const productId=String(b.product_id||"").trim().toUpperCase();
+    const name=String(b.name||"").trim().slice(0,180);
+    const price=Number(b.price);
+    const fileKey=String(b.file_key||"").trim().slice(0,500);
+    const fileName=String(b.file_name||"").trim().slice(0,255);
+    const author=String(b.author||"").trim().slice(0,120);
+    const description=String(b.description||"").trim().slice(0,3000);
+    const language=String(b.language||"Hindi").trim().slice(0,40)||"Hindi";
+    const pages=b.pages===""||b.pages==null?null:Number(b.pages);
+    const coverUrl=String(b.cover_url||"").trim().slice(0,1000);
+    if(!/^[A-Z0-9_-]{3,64}$/.test(productId)||!name||!Number.isFinite(price)||price<0||!fileKey||!fileName|| (pages!==null&&(!Number.isInteger(pages)||pages<1))) {
+      return json({error:"Product ID, नाम, सही कीमत, PDF File Key और PDF File Name जाँचें। Pages खाली या positive integer होना चाहिए।"},400);
+    }
+    try {
+      await env.DB.prepare(`INSERT INTO products(product_id,name,price,currency,file_key,file_name,active,author,description,language,pages,cover_url,featured,popular,updated_at)
+        VALUES(?1,?2,?3,'INR',?4,?5,1,?6,?7,?8,?9,?10,?11,?12,CURRENT_TIMESTAMP)`)
+        .bind(productId,name,r2(price),fileKey,fileName,author||null,description||null,language,pages,coverUrl||null,b.featured?1:0,b.popular?1:0).run();
+      return json({ok:true,product_id:productId});
+    } catch(err) {
+      console.error("admin product save failed",err);
+      return json({error:"किताब सेव नहीं हुई। Product ID पहले से हो सकती है या Product Manager migration लागू नहीं है।"},409);
+    }
   }
 
   if (path === "/api/admin/combo-delete") {
