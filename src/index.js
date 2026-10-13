@@ -1958,7 +1958,9 @@ async function handleAdmin(
            LEFT JOIN combo_offers co ON co.combo_id=o.combo_id
           ORDER BY COALESCE(o.paid_at,'') DESC, o.rowid DESC LIMIT 100`
       ).all()).results || [];
-    } catch (e) { /* Keep other admin tools usable if the combo migration is not installed. */ }
+   } catch (e) {
+  console.error("ADMIN ORDERS QUERY FAILED:", e?.message || e);
+}
 
     return json({ products, offers, coupons, combos, orders });
   }
