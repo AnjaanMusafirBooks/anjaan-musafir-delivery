@@ -1750,6 +1750,36 @@ async function handleProduct(
 }
 
 
+// Public book metadata used to build the storefront dynamically.
+async function handleBooks(env) {
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT product_id, name, price, currency, author, description, language,
+              pages, cover_url, featured, popular, active
+       FROM products WHERE active = 1 ORDER BY created_at ASC, name ASC`
+    ).all();
+
+    const books = (results || []).map((p) => ({
+      product_id: p.product_id,
+      name: p.name,
+      price: Number(p.price),
+      currency: p.currency || "INR",
+      author: p.author || "Anjaan Musafir Books",
+      description: p.description || "इस eBook के बारे में अधिक जानकारी जल्द उपलब्ध होगी।",
+      language: p.language || "Hindi",
+      pages: p.pages == null ? null : Number(p.pages),
+      cover_url: p.cover_url || "",
+      featured: !!p.featured,
+      popular: !!p.popular
+    }));
+
+    return json({ ok: true, books }, 200, { "Cache-Control": "no-store" });
+  } catch (err) {
+    console.error("public book listing failed", err);
+    return json({ ok: false, error: "Book listing temporarily unavailable." }, 503, { "Cache-Control": "no-store" });
+  }
+}
+
 // एक ही call में सारी किताबों की कीमत+offer
 
 async function handleCatalog(
@@ -2424,6 +2454,12 @@ export default {
         );
       }
 
+
+      // Public active-book listing for the storefront. Kept separate from /api/catalog
+      // so the existing pricing/checkout response shape remains backward compatible.
+      if (request.method === "GET" && url.pathname === "/api/books") {
+        return await handleBooks(env);
+      }
 
       if (
         request.method === "GET" &&
