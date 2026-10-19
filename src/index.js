@@ -2034,15 +2034,44 @@ async function handleAdmin(
     if(!/^[A-Z0-9_-]{3,64}$/.test(productId)||!name||!Number.isFinite(price)||price<0||!fileKey||!fileName|| (pages!==null&&(!Number.isInteger(pages)||pages<1))) {
       return json({error:"Product ID, नाम, सही कीमत, PDF File Key और PDF File Name जाँचें। Pages खाली या positive integer होना चाहिए।"},400);
     }
+   
     try {
-      await env.DB.prepare(`INSERT INTO products(product_id,name,price,currency,file_key,file_name,active,author,description,language,pages,cover_url,featured,popular,updated_at)
-        VALUES(?1,?2,?3,'INR',?4,?5,1,?6,?7,?8,?9,?10,?11,?12,CURRENT_TIMESTAMP)`)
-        .bind(productId,name,r2(price),fileKey,fileName,author||null,description||null,language,pages,coverUrl||null,b.featured?1:0,b.popular?1:0).run();
-      return json({ok:true,product_id:productId});
-    } catch(err) {
-      console.error("admin product save failed",err);
-      return json({error:"किताब सेव नहीं हुई। Product ID पहले से हो सकती है या Product Manager migration लागू नहीं है।"},409);
+      await env.DB.prepare(`
+        INSERT INTO products(
+          product_id, name, price, base_price, currency,
+          file_key, file_name, active, author, description,
+          language, pages, cover_url, featured, popular, updated_at
+        )
+        VALUES(
+          ?1, ?2, ?3, ?3, 'INR',
+          ?4, ?5, 1, ?6, ?7,
+          ?8, ?9, ?10, ?11, ?12, CURRENT_TIMESTAMP
+        )
+      `)
+      .bind(
+        productId,
+        name,
+        r2(price),
+        fileKey,
+        fileName,
+        author || null,
+        description || null,
+        language,
+        pages,
+        coverUrl || null,
+        b.featured ? 1 : 0,
+        b.popular ? 1 : 0
+      )
+      .run();
+
+      return json({ ok: true, product_id: productId });
+    } catch (err) {
+      console.error("admin product save failed", err);
+      return json({
+        error: "किताब सेव नहीं हुई। Product ID पहले से हो सकती है या Database में कोई समस्या है।"
+      }, 409);
     }
+ 
   }
 
   if (path === "/api/admin/combo-delete") {
