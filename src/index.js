@@ -339,6 +339,63 @@ async function issueDownloadToken(env, orderId) {
    और Brevo से delivery email भेजना इसी flow में जुड़ा है।
    ============================================================ */
 
+async function sendMetaPurchase(env, order) {
+  if (!env.META_CAPI_ACCESS_TOKEN || !order) return;
+
+  const eventId = String(order.order_id || "").trim();
+  if (!eventId) return;
+
+  const sha256 = async (value) => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (!normalized) return null;
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(normalized)
+    );
+    return Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  };
+
+  const userData = {};
+  const emailHash = await sha256(order.customer_email);
+  if (emailHash) userData.em = [emailHash];
+
+  const phone = String(order.customer_phone || "").replace(/\D/g, "");
+  const phoneHash = await sha256(phone);
+  if (phoneHash) userData.ph = [phoneHash];
+
+  const response = await fetch(
+    "https://graph.facebook.com/v23.0/3139235239760949/events?access_token=" +
+      encodeURIComponent(env.META_CAPI_ACCESS_TOKEN),
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        data: [{
+          event_name: "Purchase",
+          event_time: Math.floor(Date.now() / 1000),
+          event_id: eventId,
+          action_source: "website",
+          event_source_url: "https://anjaanmusafirbooks.github.io/official/",
+          user_data: userData,
+          custom_data: {
+            currency: "INR",
+            value: Number(order.final_price || 0)
+          }
+        }]
+      })
+    }
+  );
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || result.error) {
+    console.error("Meta CAPI Purchase failed:", response.status, result);
+    return;
+  }
+  console.log("Meta CAPI Purchase accepted:", result);
+}
+
 async function markOrderPaidAndToken(env, orderId) {
   const order = await env.DB.prepare(
     "SELECT * FROM orders WHERE order_id = ?1 LIMIT 1"
@@ -372,6 +429,14 @@ async function markOrderPaidAndToken(env, orderId) {
     await issueDownloadToken(env, orderId);
 
   if (firstTime) {
+    // Send server Purchase only once, on the first successful PAID transition.
+    // Browser Pixel uses the same order_id as eventID for Meta deduplication.
+    try {
+      await sendMetaPurchase(env, order);
+    } catch (e) {
+      console.error("Meta CAPI Purchase error:", e);
+    }
+
     await sendOrderEmail(
       env,
       order,
